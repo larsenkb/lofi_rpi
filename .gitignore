@@ -1,0 +1,11 @@
+*.elf
+*.hex
+*.lst
+*.map
+*.o
+*.sym
+*.lss
+*.epp
+*~
+tags
+lofi_rpi
