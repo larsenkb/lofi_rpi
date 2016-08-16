@@ -1,6 +1,11 @@
 /*
  * lofi_rx.c:
  *	Receive and process lofi security packets.
+ *	on odroid c1+  - spi not working correctly so I added a bit-bang spi
+ *	when using bit-bang spi don't add the following modules, otherwise do add them...
+ *	spicc
+ *	spidev
+ *	aml_i2c
  *
  */
 
