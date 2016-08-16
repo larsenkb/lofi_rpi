@@ -18,6 +18,13 @@
 #define nrfIrq		4
 #define nrfCSN		10
 #define nrfCE		6
+#define SPI_BIT_BANG	1
+#if SPI_BIT_BANG
+#define MOSI_PIN	12
+#define MISO_PIN	13
+#define SCLK_PIN	14
+#endif
+
 #define MAX_NODES		20
 
 #define handle_error(msg) \
@@ -54,16 +61,10 @@
 typedef enum {
 	SENID_NONE = 0,
 	SENID_CTR,
-	SENID_SW1_NC_PC,
+	SENID_SW1,
 	SENID_VCC,
 	SENID_TEMP,
-	SENID_SW1_NC_POLL,
-	SENID_SW1_NO_PC,
-	SENID_SW1_NO_POLL,
-	SENID_SW2_NC_PC,
-	SENID_SW2_NC_POLL,
-	SENID_SW2_NO_PC,
-	SENID_SW2_NO_POLL
+	SENID_SW2
 } senId_t;
 
 typedef struct {
@@ -80,7 +81,9 @@ char *pgmName = NULL;
 int speed_1M = 0;
 int rf_chan = 2;
 static int mainThreadPid;
+#if !SPI_BIT_BANG
 static int spiFd;
+#endif
 
 
 
@@ -105,7 +108,7 @@ void nrfIntrHandler(void)
 		nrfRead( payload, 8 );
 		parse_payload( payload );
 	}
-	sigqueue(mainThreadPid, SIGQUIT, (const union sigval)0);
+//	sigqueue(mainThreadPid, SIGQUIT, (const union sigval)0);
 }
 
 int Usage(void)
@@ -122,8 +125,8 @@ int main(int argc, char *argv[])
 {
 	sigset_t mask;
 	int sfd;
-	struct signalfd_siginfo fdsi;
-	ssize_t s;
+//	struct signalfd_siginfo fdsi;
+//	ssize_t s;
 //	uint8_t spiBuf[16];
 	uint8_t val8;
 //	int rv;
@@ -160,8 +163,16 @@ int main(int argc, char *argv[])
 	pinMode(nrfCE, OUTPUT);
     digitalWrite(nrfCE, LOW);
 
-	spiSetup(1000000);
-
+#if SPI_BIT_BANG
+    printf("BIT BANG SPI\n");
+	pinMode(MOSI_PIN, OUTPUT);
+	digitalWrite(MOSI_PIN, LOW);
+	pinMode(SCLK_PIN, OUTPUT);
+	digitalWrite(SCLK_PIN, LOW);
+	pinMode(MISO_PIN, INPUT);
+#else
+    spiSetup(1000000);
+#endif
 
 	// NRF setup
 	// enable 8-bit CRC; mask TX_DS and MAX_RT
@@ -230,6 +241,7 @@ int main(int argc, char *argv[])
 		handle_error("signalfd");
 
 	for (;;) {
+#if 0
 		s = read(sfd, &fdsi, sizeof(struct signalfd_siginfo));
 		if (s != sizeof(struct signalfd_siginfo)) {
 			handle_error("read");
@@ -244,6 +256,7 @@ printf("s = %d\n", s); fflush(stdout);
 		} else {
 			printf("Read unexpected signal\n"); fflush(stdout);
 		}
+#endif
 	}
 #if 0
 	for (;;) {
@@ -313,6 +326,7 @@ int parse_payload( uint8_t *payload )
 	char tbuf[128];
 	int		tbufIdx = 0;
 
+
 	tbuf[0] = '\0';
 	if (printPayload) {
 		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "Payload: %02X %02X %02X %02X %02X %02X %02X %02X\n",
@@ -348,7 +362,7 @@ int parse_payload( uint8_t *payload )
 			else
 				printf("%d NodeId: %2d  Ctr: %4d\n", (unsigned int)ts.tv_sec, nodeId, val);
 			break;
-		case SENID_SW1_NC_PC:
+		case SENID_SW1:
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
 			if (longStr)
@@ -356,7 +370,7 @@ int parse_payload( uint8_t *payload )
 			else
 				printf("%d NodeId: %2d  SW1 %2d: %s", (unsigned int)ts.tv_sec, nodeId, sensorId,  (payload[i++] & 0x02) ? " OPEN\n" : " CLOSED\n");
 			break;
-		case SENID_SW2_NC_PC:
+		case SENID_SW2:
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
 			if (longStr)
@@ -398,6 +412,7 @@ int parse_payload( uint8_t *payload )
 }
 
 
+#if 0
 void spiSetup(int speed)
 {
 	if ((spiFd = wiringPiSPISetup(0, speed)) < 0) {
@@ -405,8 +420,40 @@ void spiSetup(int speed)
 		exit (EXIT_FAILURE);
 	}
 }
+#endif
 
+#if SPI_BIT_BANG
+int spiXfer(uint8_t *buf, int cnt)
+{
+	uint8_t tmpOut, tmpIn;
+	int i;
 
+	digitalWrite(nrfCSN, LOW);
+	while (cnt--) {
+		tmpIn = 0;
+		tmpOut = *buf;
+		for (i = 0; i < 8; i++) {
+			tmpIn<<=1;
+			// write MOSI
+			if (tmpOut & (1<<(7-i)))
+				digitalWrite(MOSI_PIN, HIGH);
+			else
+				digitalWrite(MOSI_PIN, LOW);
+			// write SCLK
+			digitalWrite(SCLK_PIN, HIGH);
+			// read MISO
+			if (digitalRead(MISO_PIN) == HIGH)
+				tmpIn |= 1;
+			digitalWrite(SCLK_PIN, LOW);
+		}
+		*buf++ = tmpIn;;
+	}
+	digitalWrite(nrfCSN, LOW);
+	digitalWrite(nrfCSN, LOW);
+	digitalWrite(nrfCSN, HIGH);
+	return 0;
+}
+#else
 int spiXfer(uint8_t *buf, int cnt)
 {
 	int rv;
@@ -420,6 +467,7 @@ int spiXfer(uint8_t *buf, int cnt)
 	}
 	return 0;
 }
+#endif
 
 int nrfAddrRead( uint8_t reg, uint8_t *buf, int len )
 {
