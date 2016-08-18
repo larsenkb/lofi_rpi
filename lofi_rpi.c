@@ -85,7 +85,7 @@ int printPayload = 0;
 char *pgmName = NULL;
 int speed_1M = 0;
 int rf_chan = 2;
-static int mainThreadPid;
+//static int mainThreadPid;
 #if !SPI_BIT_BANG
 static int spiFd;
 #endif
@@ -104,12 +104,19 @@ int nrfRead( uint8_t *payload, int len );
 int nrfFlushTx( void );
 int nrfFlushRx( void );
 int nrfAddrRead( uint8_t reg, uint8_t *buf, int len );
+uint8_t nrfReadRxPayloadLen(void);
 
 
 void nrfIntrHandler(void)
 {
-//	printf("Made it to ISR\n"); 
-	while (nrfAvailable(0)) {
+	uint8_t pipeNum;
+	uint8_t payLen;
+
+	printf("ISR"); 
+	while (nrfAvailable(&pipeNum)) {
+//		nrfRegRead(RX_PW_P0
+		payLen = nrfReadRxPayloadLen();
+		printf(" pipeNum: %d  payLen: %d\n", pipeNum, payLen);fflush(stdout);
 		nrfRead( payload, 8 );
 		parse_payload( payload );
 	}
@@ -128,8 +135,8 @@ int Usage(void)
  */
 int main(int argc, char *argv[])
 {
-	sigset_t mask;
-	int sfd;
+//	sigset_t mask;
+//	int sfd;
 //	struct signalfd_siginfo fdsi;
 //	ssize_t s;
 //	uint8_t spiBuf[16];
@@ -184,7 +191,8 @@ int main(int argc, char *argv[])
 	nrfRegWrite( NRF_CONFIG, 0x38 );
 
 	// set nbr of retries and delay
-	nrfRegWrite( NRF_SETUP_RETR, 0x5F );
+	// only needed for PTX???
+//	nrfRegWrite( NRF_SETUP_RETR, 0x5F );
 
 	// Disable dynamic payload
 	nrfRegWrite( NRF_FEATURE, 0);
@@ -195,11 +203,19 @@ int main(int argc, char *argv[])
 
 	nrfRegWrite( NRF_EN_RXADDR, 3 );
 	nrfRegWrite( NRF_RX_PW_P0, 8 );
+#if 1
+	nrfRegWrite( NRF_RX_PW_P1, 0 );
+	nrfRegWrite( NRF_RX_PW_P2, 0 );
+	nrfRegWrite( NRF_RX_PW_P3, 0 );
+	nrfRegWrite( NRF_RX_PW_P4, 0 );
+	nrfRegWrite( NRF_RX_PW_P5, 0 );
+#else
 	nrfRegWrite( NRF_RX_PW_P1, 8 );
 	nrfRegWrite( NRF_RX_PW_P2, 8 );
 	nrfRegWrite( NRF_RX_PW_P3, 8 );
 	nrfRegWrite( NRF_RX_PW_P4, 8 );
 	nrfRegWrite( NRF_RX_PW_P5, 8 );
+#endif
 
 	// Set up channel
 	nrfRegWrite( NRF_RF_CH, 2 );
@@ -211,8 +227,6 @@ int main(int argc, char *argv[])
 		nrfRegWrite( NRF_RF_SETUP, val8 | 0x08 );
 	}
 	
-	nrfPrintDetails();
-
 	nrfFlushTx();
 	nrfFlushRx();
 
@@ -227,8 +241,11 @@ int main(int argc, char *argv[])
 
     digitalWrite(nrfCE, HIGH);
 
-	nrfRegWrite( NRF_EN_RXADDR, 15 );
+	nrfRegWrite( NRF_EN_RXADDR, 1 );
 
+	nrfPrintDetails();
+
+#if 0
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGQUIT);
 	sigaddset(&mask, SIGUSR1);
@@ -244,8 +261,10 @@ int main(int argc, char *argv[])
 
 	if (sfd == -1)
 		handle_error("signalfd");
+#endif
 
 	for (;;) {
+		delay(10000);
 #if 0
 		s = read(sfd, &fdsi, sizeof(struct signalfd_siginfo));
 		if (s != sizeof(struct signalfd_siginfo)) {
@@ -515,6 +534,16 @@ uint8_t nrfRegRead( int reg )
 	uint8_t spiBuf[2];
 
 	spiBuf[0] = reg & 0x1f;
+	spiBuf[1] = 0;
+	spiXfer(spiBuf, 2);
+	return spiBuf[1];
+}
+
+uint8_t nrfReadRxPayloadLen(void)
+{
+	uint8_t spiBuf[2];
+
+	spiBuf[0] = 0x60;
 	spiBuf[1] = 0;
 	spiXfer(spiBuf, 2);
 	return spiBuf[1];
