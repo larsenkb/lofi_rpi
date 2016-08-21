@@ -20,6 +20,7 @@
 #include <wiringPi.h>
 #include <wiringPiSPI.h>
 
+#define EN_ENH_SWAVE	1
 #define nrfIrq		4
 #define nrfCSN		10
 #define nrfCE		6
@@ -110,13 +111,14 @@ uint8_t nrfReadRxPayloadLen(void);
 void nrfIntrHandler(void)
 {
 	uint8_t pipeNum;
-	uint8_t payLen;
+	uint8_t payLen __attribute__ ((unused));
 
-	printf("ISR"); 
+//	printf("ISR"); 
 	while (nrfAvailable(&pipeNum)) {
 //		nrfRegRead(RX_PW_P0
 		payLen = nrfReadRxPayloadLen();
-		printf(" pipeNum: %d  payLen: %d\n", pipeNum, payLen);fflush(stdout);
+//		printf(" pipeNum: %d  payLen: %d\n", pipeNum, payLen);fflush(stdout);
+
 		nrfRead( payload, 8 );
 		parse_payload( payload );
 	}
@@ -140,7 +142,7 @@ int main(int argc, char *argv[])
 //	struct signalfd_siginfo fdsi;
 //	ssize_t s;
 //	uint8_t spiBuf[16];
-	uint8_t val8;
+	uint8_t val8 __attribute__ ((unused));
 //	int rv;
 	int opt;
 
@@ -190,9 +192,17 @@ int main(int argc, char *argv[])
 	// enable 8-bit CRC; mask TX_DS and MAX_RT
 	nrfRegWrite( NRF_CONFIG, 0x38 );
 
+#if EN_ENH_SWAVE
 	// set nbr of retries and delay
 	// only needed for PTX???
-//	nrfRegWrite( NRF_SETUP_RETR, 0x5F );
+	nrfRegWrite( NRF_SETUP_RETR, 0x5F );
+
+	// enable auto ack
+	nrfRegWrite( NRF_EN_AA, 3 );
+#else
+	nrfRegWrite( NRF_SETUP_RETR, 0 );
+	nrfRegWrite( NRF_EN_AA, 0 );
+#endif
 
 	// Disable dynamic payload
 	nrfRegWrite( NRF_FEATURE, 0);
@@ -204,7 +214,7 @@ int main(int argc, char *argv[])
 	nrfRegWrite( NRF_EN_RXADDR, 3 );
 	nrfRegWrite( NRF_RX_PW_P0, 8 );
 #if 1
-	nrfRegWrite( NRF_RX_PW_P1, 0 );
+	nrfRegWrite( NRF_RX_PW_P1, 8 );
 	nrfRegWrite( NRF_RX_PW_P2, 0 );
 	nrfRegWrite( NRF_RX_PW_P3, 0 );
 	nrfRegWrite( NRF_RX_PW_P4, 0 );
@@ -218,15 +228,23 @@ int main(int argc, char *argv[])
 #endif
 
 	// Set up channel
-	nrfRegWrite( NRF_RF_CH, 2 );
+	nrfRegWrite( NRF_RF_CH, rf_chan );
 
+#if 1
+	if (speed_1M) {
+		nrfRegWrite( NRF_RF_SETUP, 0x06 );
+	} else {
+		nrfRegWrite( NRF_RF_SETUP, 0x0e );
+	}
+#else
 	val8 = nrfRegRead( NRF_RF_SETUP );
 	val8 &= ~0x28;
 	if (speed_1M) {
 	} else {
 		nrfRegWrite( NRF_RF_SETUP, val8 | 0x08 );
 	}
-	
+#endif
+
 	nrfFlushTx();
 	nrfFlushRx();
 
@@ -241,7 +259,7 @@ int main(int argc, char *argv[])
 
     digitalWrite(nrfCE, HIGH);
 
-	nrfRegWrite( NRF_EN_RXADDR, 1 );
+//	nrfRegWrite( NRF_EN_RXADDR, 3 );
 
 	nrfPrintDetails();
 
@@ -348,10 +366,12 @@ int parse_payload( uint8_t *payload )
 	uint8_t	sensorId;
 	uint8_t nodeId;
 	char tbuf[128];
+	char sbuf[80];
 	int		tbufIdx = 0;
 
 
 	tbuf[0] = '\0';
+	sbuf[0] = '\0';
 	if (printPayload) {
 		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "Payload: %02X %02X %02X %02X %02X %02X %02X %02X\n",
 			payload[0], payload[1], payload[2], payload[3],
@@ -361,8 +381,10 @@ int parse_payload( uint8_t *payload )
 	clock_gettime(CLOCK_REALTIME, &ts);
 	nodeId = payload[0];
 
-	if (nodeId >= MAX_NODES)
+	if (nodeId >= MAX_NODES) {
 		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "Bad nodeId: %d\n", nodeId);
+		// probably want to print this and exit and not continue parsing...
+	}
 
 	if (longStr)
 		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "%d NodeId: %2d", (int)ts.tv_sec, nodeId);
@@ -376,7 +398,7 @@ int parse_payload( uint8_t *payload )
 			val += payload[i++];
 			if (nodes[nodeId].online) {
 				if (val != ((nodes[nodeId].ctr + 1) & 0x3ff)) {
-					printf("Skipped ctr: was: %d  is: %d\n", nodes[nodeId].ctr, val);
+					sprintf(sbuf, "  Skipped ctr: was: %d  is: %d", nodes[nodeId].ctr, val);
 				}
 			}
 			nodes[nodeId].online = 1;
@@ -426,9 +448,11 @@ int parse_payload( uint8_t *payload )
 	}
 
 //	printf(" %d\n", radio.testRPD());
-	if (longStr)
-		printf("%s\n", tbuf);
-	else
+	if (longStr) {
+		printf("%s", tbuf);
+		if (sbuf[0] != '\0') printf("%s", sbuf);
+		printf("\n");
+	} else
 		printf("\n");
 				
 	fflush(stdout);
@@ -633,7 +657,10 @@ void nrfPrintDetails(void)
   printf("FEATURE: %02X\n", nrfRegRead( NRF_FEATURE ));
 
 #if 1
-  printf("Data Rate\t = %s\n", "2Mbps" );
+  if (speed_1M)
+	printf("Data Rate\t = %s\n", "1Mbps" );
+  else
+	printf("Data Rate\t = %s\n", "2Mbps" );
   printf("Model\t\t = %s\n", "nRF24L01+"  );
   printf("CRC Length\t = %s\n", "8 bits");
   printf("PA Power\t = %s\n", "PA_MAX" );
