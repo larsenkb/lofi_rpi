@@ -31,6 +31,8 @@
 #define SCLK_PIN	14
 #endif
 
+#define PAYLOAD_LEN	8
+
 #define MAX_NODES		20
 
 #define handle_error(msg) \
@@ -80,7 +82,7 @@ typedef struct {
 
 node_t nodes[MAX_NODES];
 
-unsigned char payload[8];
+unsigned char payload[PAYLOAD_LEN];
 int longStr = 0;
 int printPayload = 0;
 char *pgmName = NULL;
@@ -114,14 +116,14 @@ void nrfIntrHandler(void)
 	uint8_t payLen __attribute__ ((unused));
 
 //	printf("ISR"); 
-	while (nrfAvailable(&pipeNum)) {
+//	while (nrfAvailable(&pipeNum)) {
 //		nrfRegRead(RX_PW_P0
 		payLen = nrfReadRxPayloadLen();
 //		printf(" pipeNum: %d  payLen: %d\n", pipeNum, payLen);fflush(stdout);
 
-		nrfRead( payload, 8 );
+		nrfRead( payload, payLen );
 		parse_payload( payload );
-	}
+//	}
 //	sigqueue(mainThreadPid, SIGQUIT, (const union sigval)0);
 }
 
@@ -377,6 +379,8 @@ int parse_payload( uint8_t *payload )
 			payload[0], payload[1], payload[2], payload[3],
 			payload[4], payload[5], payload[6], payload[7]);
 	}
+	printf("%s",tbuf);
+	return 0;
 			
 	clock_gettime(CLOCK_REALTIME, &ts);
 	nodeId = payload[0];
@@ -496,8 +500,8 @@ int spiXfer(uint8_t *buf, int cnt)
 		}
 		*buf++ = tmpIn;;
 	}
-	digitalWrite(nrfCSN, LOW);
-	digitalWrite(nrfCSN, LOW);
+//	digitalWrite(nrfCSN, LOW);
+//	digitalWrite(nrfCSN, LOW);
 	digitalWrite(nrfCSN, HIGH);
 	return 0;
 }
