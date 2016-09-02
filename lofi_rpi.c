@@ -77,17 +77,31 @@ typedef enum {
 
 typedef struct {
 	int	online;
-	int ctr;
+	int	ctr;
+	int	ctrSkipped;
+	int	exclude;
+	int	badSensorId;;
+	int	pktsRcvd;
 } node_t;
 
 node_t nodes[MAX_NODES];
 
-unsigned char payload[PAYLOAD_LEN];
+typedef struct {
+	int	pktsRcvd;
+	int	badNodeId;
+	int	badSensorId;
+	int	badPayloadSize;
+} stats_t;
+
+stats_t	stats;
+
+//unsigned char payload[PAYLOAD_LEN];
 int longStr = 0;
 int printPayload = 0;
 char *pgmName = NULL;
 int speed_1M = 0;
 int rf_chan = 2;
+int maxNodeRcvd = 0;
 //static int mainThreadPid;
 #if !SPI_BIT_BANG
 static int spiFd;
@@ -109,23 +123,68 @@ int nrfFlushRx( void );
 int nrfAddrRead( uint8_t reg, uint8_t *buf, int len );
 uint8_t nrfReadRxPayloadLen(void);
 
+void printNodes(void)
+{
+	int i;
+
+	for (i = 0; i <= maxNodeRcvd; i++) {
+		if (nodes[i].online) {
+			printf("id: %2d  pktsRcvd: %6d  ctrSkipped: %6d  badSensorId: %6d\n",
+				      i, nodes[i].pktsRcvd, nodes[i].ctrSkipped, nodes[i].badSensorId);	
+		}
+	}
+//	int	online;
+//	int	ctr;
+//	int	ctrSkipped;
+//	int	exclude;
+//	int	badSensorId;;
+//	int	pktsRcvd;
+}
+
+void printStats(void)
+{
+	printf("pktsRcvd: %d\n", stats.pktsRcvd);
+	printf("badNodeId: %d\n", stats.badNodeId);
+	printf("badSensorId: %d\n", stats.badSensorId);
+	printf("badPayloadSize: %d\n", stats.badPayloadSize);
+	fflush(stdout);
+	return;
+}
+
 
 void nrfIntrHandler(void)
 {
-	uint8_t pipeNum;
+	uint8_t pipeNum __attribute__ ((unused));
 	uint8_t payLen __attribute__ ((unused));
+	unsigned char payload[PAYLOAD_LEN];
 
 //	printf("ISR"); 
 //	while (nrfAvailable(&pipeNum)) {
 //		nrfRegRead(RX_PW_P0
 		payLen = nrfReadRxPayloadLen();
 //		printf(" pipeNum: %d  payLen: %d\n", pipeNum, payLen);fflush(stdout);
+	if (payLen != PAYLOAD_LEN) {
+		fprintf(stderr, "PAYLOAD LEN: %d\n", payLen);
+		stats.badPayloadSize++;
+	}
 
 		nrfRead( payload, payLen );
+		stats.pktsRcvd++;
 		parse_payload( payload );
 //	}
 //	sigqueue(mainThreadPid, SIGQUIT, (const union sigval)0);
 }
+
+
+void sig_handler( int sig )
+{
+	if (sig == SIGINT) {
+		printStats();
+		printNodes();
+		exit(0);
+	}
+}
+
 
 int Usage(void)
 {
@@ -139,6 +198,7 @@ int Usage(void)
  */
 int main(int argc, char *argv[])
 {
+	int i __attribute__ ((unused));
 //	sigset_t mask;
 //	int sfd;
 //	struct signalfd_siginfo fdsi;
@@ -171,6 +231,19 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	memset(&stats, 0, sizeof(stats));
+
+//	atexit(printStats);
+	if (signal(SIGINT, sig_handler) == SIG_ERR)
+		fprintf(stderr, "Can't catch SIGINT\n");
+
+	memset(nodes, 0, sizeof(nodes));
+
+#if 0
+	for (i = 0; i < MAX_NODES; i++)
+		nodes[i].exclude = 1;
+	nodes[7].exclude = 0;
+#endif
 
 	wiringPiSetup();
 
@@ -259,11 +332,11 @@ int main(int argc, char *argv[])
 	// Enable PRIME RX (PRX)
 	nrfRegWrite( NRF_CONFIG, nrfRegRead( NRF_CONFIG ) | 0x01 );
 
+	nrfPrintDetails();
+
     digitalWrite(nrfCE, HIGH);
 
 //	nrfRegWrite( NRF_EN_RXADDR, 3 );
-
-	nrfPrintDetails();
 
 #if 0
 	sigemptyset(&mask);
@@ -360,6 +433,14 @@ printf("s = %d\n", s); fflush(stdout);
   return 0;
 }
 
+int showPayload( uint8_t *payload )
+{
+	printf("Payload: %02X %02X %02X %02X %02X %02X %02X %02X\n",
+		payload[0], payload[1], payload[2], payload[3],
+		payload[4], payload[5], payload[6], payload[7]);
+	return 0;
+}
+
 int parse_payload( uint8_t *payload )
 {
 	struct timespec ts;
@@ -374,27 +455,39 @@ int parse_payload( uint8_t *payload )
 
 	tbuf[0] = '\0';
 	sbuf[0] = '\0';
-	if (printPayload) {
-		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "Payload: %02X %02X %02X %02X %02X %02X %02X %02X\n",
-			payload[0], payload[1], payload[2], payload[3],
-			payload[4], payload[5], payload[6], payload[7]);
-	}
-	printf("%s",tbuf);
-	return 0;
-			
+
 	clock_gettime(CLOCK_REALTIME, &ts);
 	nodeId = payload[0];
 
 	if (nodeId >= MAX_NODES) {
-		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "Bad nodeId: %d\n", nodeId);
-		// probably want to print this and exit and not continue parsing...
+		fprintf(stderr, "Bad nodeId: %d\n", nodeId);
+		stats.badNodeId++;
+		return -1;
 	}
 
-	if (longStr)
-		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "%d NodeId: %2d", (int)ts.tv_sec, nodeId);
-	i = 1;
+	nodes[nodeId].pktsRcvd++;
 
-	while ((sensorId = (payload[i]>>3) & 0x1F) != 0) {
+	if (nodeId > maxNodeRcvd)
+		maxNodeRcvd = nodeId;
+
+	if (longStr)
+		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "%d Id: %2d", (int)ts.tv_sec, nodeId);
+
+	if (printPayload) {
+		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, " Payload: %02X %02X %02X %02X %02X %02X %02X %02X",
+			payload[0], payload[1], payload[2], payload[3],
+			payload[4], payload[5], payload[6], payload[7]);
+	}
+//	printf("%s",tbuf);
+//	tbuf[0] = '\0';
+//	return 0;
+			
+	for (i = 1; i < PAYLOAD_LEN; ) {
+
+		if (payload[i] == 0) break;
+
+		sensorId = (payload[i]>>3) & 0x1F;
+
 		switch (sensorId) {
 		case SENID_CTR:
 			val = payload[i++] & 0x03;
@@ -403,6 +496,7 @@ int parse_payload( uint8_t *payload )
 			if (nodes[nodeId].online) {
 				if (val != ((nodes[nodeId].ctr + 1) & 0x3ff)) {
 					sprintf(sbuf, "  Skipped ctr: was: %d  is: %d", nodes[nodeId].ctr, val);
+					nodes[nodeId].ctrSkipped++;
 				}
 			}
 			nodes[nodeId].online = 1;
@@ -416,17 +510,19 @@ int parse_payload( uint8_t *payload )
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
 			if (longStr)
-				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW1 %2d: %s", sensorId, (payload[i++] & 0x02) ? "OPEN  " : "CLOSED");
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW1 %2d: %s", sensorId, (payload[i] & 0x02) ? "OPEN  " : "CLOSED");
 			else
-				printf("%d NodeId: %2d  SW1 %2d: %s", (unsigned int)ts.tv_sec, nodeId, sensorId,  (payload[i++] & 0x02) ? " OPEN\n" : " CLOSED\n");
+				printf("%d NodeId: %2d  SW1 %2d: %s", (unsigned int)ts.tv_sec, nodeId, sensorId,  (payload[i] & 0x02) ? " OPEN\n" : " CLOSED\n");
+			i++;
 			break;
 		case SENID_SW2:
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
 			if (longStr)
-				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW2 %2d: %s", sensorId, (payload[i++] & 0x02) ? "OPEN  " : "CLOSED");
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW2 %2d: %s", sensorId, (payload[i] & 0x02) ? "OPEN  " : "CLOSED");
 			else
-				printf("%d NodeId: %2d  SW2 %2d: %s", (unsigned int)ts.tv_sec, nodeId, sensorId,  (payload[i++] & 0x02) ? " OPEN\n" : " CLOSED\n");
+				printf("%d NodeId: %2d  SW2 %2d: %s", (unsigned int)ts.tv_sec, nodeId, sensorId,  (payload[i] & 0x02) ? " OPEN\n" : " CLOSED\n");
+			i++;
 			break;
 		case SENID_VCC:
 			val = payload[i++] & 0x03;
@@ -447,11 +543,21 @@ int parse_payload( uint8_t *payload )
 				printf("%d NodeId: %2d  Vcc: %4.2f\n", (unsigned int)ts.tv_sec, nodeId, 1.0 * (float)val - 260.0);
 			break;
 		default:
+			fprintf(stderr, "Bad SensorId: %d\n", sensorId);
+			stats.badSensorId++;
+			nodes[nodeId].badSensorId++;
+//			showPayload(payload);
+//			exit(1);
+			return -1;
 			break;
 		}
 	}
 
 //	printf(" %d\n", radio.testRPD());
+	
+	if (nodes[nodeId].exclude)
+		return 0;
+
 	if (longStr) {
 		printf("%s", tbuf);
 		if (sbuf[0] != '\0') printf("%s", sbuf);
