@@ -82,6 +82,7 @@ typedef struct {
 	int	exclude;
 	int	badSensorId;;
 	int	pktsRcvd;
+	float	vcc;
 } node_t;
 
 node_t nodes[MAX_NODES];
@@ -129,8 +130,8 @@ void printNodes(void)
 
 	for (i = 0; i <= maxNodeRcvd; i++) {
 		if (nodes[i].online) {
-			printf("id: %2d  pktsRcvd: %6d  ctrSkipped: %6d  badSensorId: %6d\n",
-				      i, nodes[i].pktsRcvd, nodes[i].ctrSkipped, nodes[i].badSensorId);	
+			printf("id: %2d  pktsRcvd: %6d  ctrSkipped: %6d  badSensorId: %6d  Vcc: %4.2f\n",
+				      i, nodes[i].pktsRcvd, nodes[i].ctrSkipped, nodes[i].badSensorId, nodes[i].vcc);	
 		}
 	}
 //	int	online;
@@ -188,10 +189,68 @@ void sig_handler( int sig )
 
 int Usage(void)
 {
-	fprintf(stderr, "Usage: %s [-l] [-p] [-c chan] [-s]\n", pgmName);
+	fprintf(stderr, "Usage: %s [-l] [-p] [-c chan] [-s] [-x \"1,2,3-5,7\"] [-f \"1,2,3-5,7\"]\n", pgmName);
 	return 0;
 }
 
+int exclude_nodes(node_t nodes[], char *optarg)
+{
+	char *ptr;
+	unsigned long val, val2;
+	int i;
+
+//	printf("-x args: %s\n",optarg);
+	ptr = optarg;
+	while(*ptr != '\0') {
+		val = strtoul(ptr, &ptr, 10);
+		if (*ptr == ',' || *ptr == '\0') {
+//			printf("val: %lu\n", val);
+//			printf("ptr: %c\n", *ptr);
+			nodes[val].exclude = 1;
+		} else if (*ptr == '-') {
+			val2 = strtoul(ptr+1, &ptr, 10);
+//			printf("val - val2: %lu %lu\n", val, val2);
+			for (i = val; i <= val2; i++) {
+				if (i < MAX_NODES)
+					nodes[i].exclude = 1;
+			}
+		}
+		if (*ptr != '\0') ptr++;
+	}
+
+	return 0;
+}
+
+int filter_nodes(node_t nodes[], char *optarg)
+{
+	char *ptr;
+	unsigned long val, val2;
+	int i;
+
+//	printf("-x args: %s\n",optarg);
+	for (i = 0; i < MAX_NODES; i++) {
+		nodes[i].exclude = 1;
+	}
+	ptr = optarg;
+	while(*ptr != '\0') {
+		val = strtoul(ptr, &ptr, 10);
+		if (*ptr == ',' || *ptr == '\0') {
+//			printf("val: %lu\n", val);
+//			printf("ptr: %c\n", *ptr);
+			nodes[val].exclude = 0;
+		} else if (*ptr == '-') {
+			val2 = strtoul(ptr+1, &ptr, 10);
+//			printf("val - val2: %lu %lu\n", val, val2);
+			for (i = val; i <= val2; i++) {
+				if (i < MAX_NODES)
+					nodes[i].exclude = 0;
+			}
+		}
+		if (*ptr != '\0') ptr++;
+	}
+
+	return 0;
+}
 
 /*
  * main
@@ -210,7 +269,9 @@ int main(int argc, char *argv[])
 
 	pgmName = argv[0];
 
-	while ((opt = getopt(argc, argv, "lpsc:")) != -1) {
+	memset(nodes, 0, sizeof(nodes));
+
+	while ((opt = getopt(argc, argv, "lpsc:x:f:")) != -1) {
 		switch (opt) {
 		case 'l':
 			longStr = 1;
@@ -224,6 +285,18 @@ int main(int argc, char *argv[])
 		case 'c':
 			rf_chan = atoi(optarg);
 			break;
+		case 'x':
+			exclude_nodes(nodes, optarg);
+			for (i = 0; i < MAX_NODES; i++) {
+				printf("%2d  %d\n", i, nodes[i].exclude);
+			}
+			break;
+		case 'f':
+			filter_nodes(nodes, optarg);
+			for (i = 0; i < MAX_NODES; i++) {
+				printf("%2d  %d\n", i, nodes[i].exclude);
+			}
+			break;
 		default:
 			Usage();
 			exit(-1);
@@ -236,8 +309,6 @@ int main(int argc, char *argv[])
 //	atexit(printStats);
 	if (signal(SIGINT, sig_handler) == SIG_ERR)
 		fprintf(stderr, "Can't catch SIGINT\n");
-
-	memset(nodes, 0, sizeof(nodes));
 
 #if 0
 	for (i = 0; i < MAX_NODES; i++)
@@ -532,6 +603,7 @@ int parse_payload( uint8_t *payload )
 				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Vcc: %4.2f",(1.1 * 1024.0)/(float)val);
 			else
 				printf("%d NodeId: %2d  Vcc: %4.2f\n", (unsigned int)ts.tv_sec, nodeId, (1.1 * 1024.0)/(float)val);
+			nodes[nodeId].vcc = (1.1 * 1024.0)/(float)val;
 			break;
 		case SENID_TEMP:
 			val = payload[i++] & 0x03;
