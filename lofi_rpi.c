@@ -76,13 +76,14 @@ typedef enum {
 } senId_t;
 
 typedef struct {
-	int	online;
-	int	ctr;
-	int	ctrSkipped;
-	int	exclude;
-	int	badSensorId;;
-	int	pktsRcvd;
-	float	vcc;
+	int		online;
+	int		ctr;
+	int		ctrSkipped;
+	int		exclude;
+	int		badSensorId;;
+	int		pktsRcvd;
+	float		vcc;
+	uint64_t	firstTime;
 } node_t;
 
 node_t nodes[MAX_NODES];
@@ -96,11 +97,17 @@ typedef struct {
 
 stats_t	stats;
 
+typedef enum {
+	speed_1M = 0,
+	speed_2M = 1,
+	speed_250K = 2
+} speed_t;
+
 //unsigned char payload[PAYLOAD_LEN];
 int longStr = 0;
 int printPayload = 0;
 char *pgmName = NULL;
-int speed_1M = 0;
+speed_t speed = speed_2M;
 int rf_chan = 2;
 int maxNodeRcvd = 0;
 //static int mainThreadPid;
@@ -134,12 +141,6 @@ void printNodes(void)
 				      i, nodes[i].pktsRcvd, nodes[i].ctrSkipped, nodes[i].badSensorId, nodes[i].vcc);	
 		}
 	}
-//	int	online;
-//	int	ctr;
-//	int	ctrSkipped;
-//	int	exclude;
-//	int	badSensorId;;
-//	int	pktsRcvd;
 }
 
 void printStats(void)
@@ -271,7 +272,7 @@ int main(int argc, char *argv[])
 
 	memset(nodes, 0, sizeof(nodes));
 
-	while ((opt = getopt(argc, argv, "lpsc:x:f:")) != -1) {
+	while ((opt = getopt(argc, argv, "lpsSc:x:f:")) != -1) {
 		switch (opt) {
 		case 'l':
 			longStr = 1;
@@ -280,7 +281,10 @@ int main(int argc, char *argv[])
 			printPayload = 1;
 			break;
 		case 's':
-			speed_1M = 1;
+			speed = speed_1M;
+			break;
+		case 'S':
+			speed = speed_250K;
 			break;
 		case 'c':
 			rf_chan = atoi(optarg);
@@ -377,11 +381,27 @@ int main(int argc, char *argv[])
 	nrfRegWrite( NRF_RF_CH, rf_chan );
 
 #if 1
+	switch (speed) {
+	case speed_1M:
+		nrfRegWrite( NRF_RF_SETUP, 0x06 );
+		break;
+	case speed_2M:
+		nrfRegWrite( NRF_RF_SETUP, 0x0e );
+		break;
+	case speed_250K:
+		nrfRegWrite( NRF_RF_SETUP, 0x26 );
+		break;
+	default:
+		nrfRegWrite( NRF_RF_SETUP, 0x0e );
+		break;
+	}
+#if 0
 	if (speed_1M) {
 		nrfRegWrite( NRF_RF_SETUP, 0x06 );
 	} else {
 		nrfRegWrite( NRF_RF_SETUP, 0x0e );
 	}
+#endif
 #else
 	val8 = nrfRegRead( NRF_RF_SETUP );
 	val8 &= ~0x28;
@@ -552,6 +572,10 @@ int parse_payload( uint8_t *payload )
 //	printf("%s",tbuf);
 //	tbuf[0] = '\0';
 //	return 0;
+
+	if (nodes[nodeId].online == 0) {
+		nodes[nodeId].firstTime = ts.tv_sec;
+	}	
 			
 	for (i = 1; i < PAYLOAD_LEN; ) {
 
@@ -578,6 +602,7 @@ int parse_payload( uint8_t *payload )
 				printf("%d NodeId: %2d  Ctr: %4d\n", (unsigned int)ts.tv_sec, nodeId, val);
 			break;
 		case SENID_SW1:
+			nodes[nodeId].online = 1;
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
 			if (longStr)
@@ -587,6 +612,7 @@ int parse_payload( uint8_t *payload )
 			i++;
 			break;
 		case SENID_SW2:
+			nodes[nodeId].online = 1;
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
 			if (longStr)
@@ -596,6 +622,7 @@ int parse_payload( uint8_t *payload )
 			i++;
 			break;
 		case SENID_VCC:
+			nodes[nodeId].online = 1;
 			val = payload[i++] & 0x03;
 			val <<= 8;
 			val += payload[i++];
@@ -606,6 +633,7 @@ int parse_payload( uint8_t *payload )
 			nodes[nodeId].vcc = (1.1 * 1024.0)/(float)val;
 			break;
 		case SENID_TEMP:
+			nodes[nodeId].online = 1;
 			val = payload[i++] & 0x03;
 			val <<= 8;
 			val += payload[i++];
@@ -839,10 +867,13 @@ void nrfPrintDetails(void)
   printf("FEATURE: %02X\n", nrfRegRead( NRF_FEATURE ));
 
 #if 1
-  if (speed_1M)
+  if (speed == speed_1M)
 	printf("Data Rate\t = %s\n", "1Mbps" );
+  else if (speed == speed_250K)
+	printf("Data Rate\t = %s\n", "250Kbps" );
   else
 	printf("Data Rate\t = %s\n", "2Mbps" );
+
   printf("Model\t\t = %s\n", "nRF24L01+"  );
   printf("CRC Length\t = %s\n", "8 bits");
   printf("PA Power\t = %s\n", "PA_MAX" );
