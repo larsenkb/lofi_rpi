@@ -110,6 +110,7 @@ char *pgmName = NULL;
 speed_t speed = speed_2M;
 int rf_chan = 2;
 int maxNodeRcvd = 0;
+int verbose = 0;
 //static int mainThreadPid;
 #if !SPI_BIT_BANG
 static int spiFd;
@@ -190,7 +191,7 @@ void sig_handler( int sig )
 
 int Usage(void)
 {
-	fprintf(stderr, "Usage: %s [-l] [-p] [-c chan] [-s] [-x \"1,2,3-5,7\"] [-f \"1,2,3-5,7\"]\n", pgmName);
+	fprintf(stderr, "Usage: %s [-v] [-l] [-p] [-c chan] [-s] [-x \"1,2,3-5,7\"] [-f \"1,2,3-5,7\"]\n", pgmName);
 	return 0;
 }
 
@@ -272,7 +273,7 @@ int main(int argc, char *argv[])
 
 	memset(nodes, 0, sizeof(nodes));
 
-	while ((opt = getopt(argc, argv, "lpsSc:x:f:")) != -1) {
+	while ((opt = getopt(argc, argv, "vlpsSc:x:f:")) != -1) {
 		switch (opt) {
 		case 'l':
 			longStr = 1;
@@ -288,6 +289,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'c':
 			rf_chan = atoi(optarg);
+			break;
+		case 'v':
+			verbose = 1;
 			break;
 		case 'x':
 			exclude_nodes(nodes, optarg);
@@ -328,7 +332,8 @@ int main(int argc, char *argv[])
     digitalWrite(nrfCE, LOW);
 
 #if SPI_BIT_BANG
-    printf("BIT BANG SPI\n");
+	if (verbose)
+		printf("BIT BANG SPI\n");
 	pinMode(MOSI_PIN, OUTPUT);
 	digitalWrite(MOSI_PIN, LOW);
 	pinMode(SCLK_PIN, OUTPUT);
@@ -423,7 +428,8 @@ int main(int argc, char *argv[])
 	// Enable PRIME RX (PRX)
 	nrfRegWrite( NRF_CONFIG, nrfRegRead( NRF_CONFIG ) | 0x01 );
 
-	nrfPrintDetails();
+	if (verbose)
+		nrfPrintDetails();
 
     digitalWrite(nrfCE, HIGH);
 
@@ -590,7 +596,8 @@ int parse_payload( uint8_t *payload )
 			val += payload[i++];
 			if (nodes[nodeId].online) {
 				if (val != ((nodes[nodeId].ctr + 1) & 0x3ff)) {
-					sprintf(sbuf, "  Skipped ctr: was: %d  is: %d", nodes[nodeId].ctr, val);
+					if (verbose)
+						sprintf(sbuf, "  Skipped ctr: was: %d  is: %d", nodes[nodeId].ctr, val);
 					nodes[nodeId].ctrSkipped++;
 				}
 			}
@@ -606,9 +613,9 @@ int parse_payload( uint8_t *payload )
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
 			if (longStr)
-				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW1 %2d: %s", sensorId, (payload[i] & 0x02) ? "OPEN  " : "CLOSED");
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW1: %s", (payload[i] & 0x02) ? "OPEN  " : "SHUT");
 			else
-				printf("%d NodeId: %2d  SW1 %2d: %s", (unsigned int)ts.tv_sec, nodeId, sensorId,  (payload[i] & 0x02) ? " OPEN\n" : " CLOSED\n");
+				printf("%d NodeId: %2d  SW1: %s", (unsigned int)ts.tv_sec, nodeId, (payload[i] & 0x02) ? " OPEN\n" : " SHUT\n");
 			i++;
 			break;
 		case SENID_SW2:
@@ -616,9 +623,9 @@ int parse_payload( uint8_t *payload )
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
 			if (longStr)
-				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW2 %2d: %s", sensorId, (payload[i] & 0x02) ? "OPEN  " : "CLOSED");
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW2: %s", (payload[i] & 0x02) ? "OPEN  " : "SHUT");
 			else
-				printf("%d NodeId: %2d  SW2 %2d: %s", (unsigned int)ts.tv_sec, nodeId, sensorId,  (payload[i] & 0x02) ? " OPEN\n" : " CLOSED\n");
+				printf("%d NodeId: %2d  SW2: %s", (unsigned int)ts.tv_sec, nodeId, (payload[i] & 0x02) ? " OPEN\n" : " SHUT\n");
 			i++;
 			break;
 		case SENID_VCC:
