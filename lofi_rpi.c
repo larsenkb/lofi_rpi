@@ -111,6 +111,7 @@ speed_t speed = speed_2M;
 int rf_chan = 2;
 int maxNodeRcvd = 0;
 int verbose = 0;
+int printTime = 0;
 //static int mainThreadPid;
 #if !SPI_BIT_BANG
 static int spiFd;
@@ -167,7 +168,7 @@ void nrfIntrHandler(void)
 		payLen = nrfReadRxPayloadLen();
 //		printf(" pipeNum: %d  payLen: %d\n", pipeNum, payLen);fflush(stdout);
 	if (payLen != PAYLOAD_LEN) {
-		fprintf(stderr, "PAYLOAD LEN: %d\n", payLen);
+		if (verbose) fprintf(stderr, "PAYLOAD LEN: %d\n", payLen);
 		stats.badPayloadSize++;
 	}
 
@@ -191,7 +192,7 @@ void sig_handler( int sig )
 
 int Usage(void)
 {
-	fprintf(stderr, "Usage: %s [-v] [-l] [-p] [-c chan] [-s] [-x \"1,2,3-5,7\"] [-f \"1,2,3-5,7\"]\n", pgmName);
+	fprintf(stderr, "Usage: %s [-v] [-l] [-p] [-c chan] [-s] [-t] [-x \"1,2,3-5,7\"] [-f \"1,2,3-5,7\"]\n", pgmName);
 	return 0;
 }
 
@@ -273,7 +274,7 @@ int main(int argc, char *argv[])
 
 	memset(nodes, 0, sizeof(nodes));
 
-	while ((opt = getopt(argc, argv, "vlpsSc:x:f:")) != -1) {
+	while ((opt = getopt(argc, argv, "vlpsStc:x:f:")) != -1) {
 		switch (opt) {
 		case 'l':
 			longStr = 1;
@@ -286,6 +287,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'S':
 			speed = speed_250K;
+			break;
+		case 't':
+			printTime = 1;
 			break;
 		case 'c':
 			rf_chan = atoi(optarg);
@@ -557,7 +561,7 @@ int parse_payload( uint8_t *payload )
 	nodeId = payload[0];
 
 	if (nodeId >= MAX_NODES) {
-		fprintf(stderr, "Bad nodeId: %d\n", nodeId);
+		if (verbose) fprintf(stderr, "Bad nodeId: %d\n", nodeId);
 		stats.badNodeId++;
 		return -1;
 	}
@@ -567,8 +571,13 @@ int parse_payload( uint8_t *payload )
 	if (nodeId > maxNodeRcvd)
 		maxNodeRcvd = nodeId;
 
-	if (longStr)
-		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "%d Id: %2d", (int)ts.tv_sec, nodeId);
+	if (longStr) {
+		if (printTime) {
+			tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "%d Id: %2d", (int)ts.tv_sec, nodeId);
+		} else {
+			tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "Id: %2d", nodeId);
+		}
+	}
 
 	if (printPayload) {
 		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, " Payload: %02X %02X %02X %02X %02X %02X %02X %02X",
