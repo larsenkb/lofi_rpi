@@ -7,6 +7,7 @@
  *	spidev
  *	aml_i2c
  *
+ * TODO: add code to print sequence number (printSeq)
  */
 
 #include <sys/signalfd.h>
@@ -68,11 +69,11 @@
 
 typedef enum {
 	SENID_NONE = 0,
-	SENID_CTR,
 	SENID_SW1,
+	SENID_SW2,
 	SENID_VCC,
 	SENID_TEMP,
-	SENID_SW2
+	SENID_CTR
 } senId_t;
 
 typedef struct {
@@ -106,6 +107,7 @@ typedef enum {
 //unsigned char payload[PAYLOAD_LEN];
 int longStr = 0;
 int printPayload = 0;
+int printSeq = 0;
 char *pgmName = NULL;
 speed_t speed = speed_2M;
 int rf_chan = 2;
@@ -274,13 +276,16 @@ int main(int argc, char *argv[])
 
 	memset(nodes, 0, sizeof(nodes));
 
-	while ((opt = getopt(argc, argv, "vlpsStc:x:f:")) != -1) {
+	while ((opt = getopt(argc, argv, "vlpsStc:x:f:q:")) != -1) {
 		switch (opt) {
 		case 'l':
 			longStr = 1;
 			break;
 		case 'p':
 			printPayload = 1;
+			break;
+		case 'q':
+			printSeq = atoi(optarg);
 			break;
 		case 's':
 			speed = speed_1M;
@@ -552,7 +557,7 @@ int parse_payload( uint8_t *payload )
 	char tbuf[128];
 	char sbuf[80];
 	int		tbufIdx = 0;
-
+	int		seq;
 
 	tbuf[0] = '\0';
 	sbuf[0] = '\0';
@@ -565,6 +570,9 @@ int parse_payload( uint8_t *payload )
 		stats.badNodeId++;
 		return -1;
 	}
+
+	if (nodes[nodeId].exclude)
+		return 0;
 
 	nodes[nodeId].pktsRcvd++;
 
@@ -596,10 +604,11 @@ int parse_payload( uint8_t *payload )
 
 		if (payload[i] == 0) break;
 
-		sensorId = (payload[i]>>3) & 0x1F;
+		sensorId = (payload[i]>>4) & 0xF;
 
 		switch (sensorId) {
 		case SENID_CTR:
+			seq = (payload[i] >> 2) & 0x3;
 			val = payload[i++] & 0x03;
 			val <<= 8;
 			val += payload[i++];
@@ -612,50 +621,64 @@ int parse_payload( uint8_t *payload )
 			}
 			nodes[nodeId].online = 1;
 			nodes[nodeId].ctr = val;
-			if (longStr)
+			if (longStr) {
 				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Ctr: %4d", val);
-			else
+				if (printSeq == (int)SENID_CTR)
+					tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
+		  } else
 				printf("%d NodeId: %2d  Ctr: %4d\n", (unsigned int)ts.tv_sec, nodeId, val);
 			break;
 		case SENID_SW1:
 			nodes[nodeId].online = 1;
+			seq = (payload[i] >> 2) & 0x3;
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
-			if (longStr)
+			if (longStr) {
 				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW1: %s", (payload[i] & 0x02) ? "OPEN  " : "SHUT");
-			else
+				if (printSeq == (int)SENID_SW1)
+					tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
+			} else
 				printf("%d NodeId: %2d  SW1: %s", (unsigned int)ts.tv_sec, nodeId, (payload[i] & 0x02) ? " OPEN\n" : " SHUT\n");
 			i++;
 			break;
 		case SENID_SW2:
 			nodes[nodeId].online = 1;
+			seq = (payload[i] >> 2) & 0x3;
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
-			if (longStr)
+			if (longStr) {
 				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW2: %s", (payload[i] & 0x02) ? "OPEN  " : "SHUT");
-			else
+				if (printSeq == (int)SENID_SW2)
+					tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
+			} else
 				printf("%d NodeId: %2d  SW2: %s", (unsigned int)ts.tv_sec, nodeId, (payload[i] & 0x02) ? " OPEN\n" : " SHUT\n");
 			i++;
 			break;
 		case SENID_VCC:
 			nodes[nodeId].online = 1;
+			seq = (payload[i] >> 2) & 0x3;
 			val = payload[i++] & 0x03;
 			val <<= 8;
 			val += payload[i++];
-			if (longStr)
+			if (longStr) {
 				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Vcc: %4.2f",(1.1 * 1024.0)/(float)val);
-			else
+				if (printSeq == (int)SENID_VCC)
+					tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
+			} else
 				printf("%d NodeId: %2d  Vcc: %4.2f\n", (unsigned int)ts.tv_sec, nodeId, (1.1 * 1024.0)/(float)val);
 			nodes[nodeId].vcc = (1.1 * 1024.0)/(float)val;
 			break;
 		case SENID_TEMP:
 			nodes[nodeId].online = 1;
+			seq = (payload[i] >> 2) & 0x3;
 			val = payload[i++] & 0x03;
 			val <<= 8;
 			val += payload[i++];
-			if (longStr)
+			if (longStr) {
 				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Temp: %4.2f",1.0 * (float)val - 260.0);
-			else
+				if (printSeq == (int)SENID_TEMP)
+					tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
+			} else
 				printf("%d NodeId: %2d  Vcc: %4.2f\n", (unsigned int)ts.tv_sec, nodeId, 1.0 * (float)val - 260.0);
 			break;
 		default:
