@@ -32,7 +32,7 @@
 #define SCLK_PIN	14
 #endif
 
-#define PAYLOAD_LEN	8
+#define PAYLOAD_LEN	3
 
 #define MAX_NODES		20
 
@@ -376,9 +376,9 @@ int main(int argc, char *argv[])
 	nrfRegWrite( NRF_STATUS, 0x70 );
 
 	nrfRegWrite( NRF_EN_RXADDR, 3 );
-	nrfRegWrite( NRF_RX_PW_P0, 8 );
+	nrfRegWrite( NRF_RX_PW_P0, PAYLOAD_LEN );
 #if 1
-	nrfRegWrite( NRF_RX_PW_P1, 8 );
+	nrfRegWrite( NRF_RX_PW_P1, PAYLOAD_LEN );
 	nrfRegWrite( NRF_RX_PW_P2, 0 );
 	nrfRegWrite( NRF_RX_PW_P3, 0 );
 	nrfRegWrite( NRF_RX_PW_P4, 0 );
@@ -541,9 +541,7 @@ printf("s = %d\n", s); fflush(stdout);
 
 int showPayload( uint8_t *payload )
 {
-	printf("Payload: %02X %02X %02X %02X %02X %02X %02X %02X\n",
-		payload[0], payload[1], payload[2], payload[3],
-		payload[4], payload[5], payload[6], payload[7]);
+	printf("Payload: %02X %02X %02X\n", payload[0], payload[1], payload[2]);
 	return 0;
 }
 
@@ -588,9 +586,8 @@ int parse_payload( uint8_t *payload )
 	}
 
 	if (printPayload) {
-		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, " Payload: %02X %02X %02X %02X %02X %02X %02X %02X",
-			payload[0], payload[1], payload[2], payload[3],
-			payload[4], payload[5], payload[6], payload[7]);
+		tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, " Payload: %02X %02X %02X",
+			payload[0], payload[1], payload[2]);
 	}
 //	printf("%s",tbuf);
 //	tbuf[0] = '\0';
