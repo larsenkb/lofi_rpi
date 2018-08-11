@@ -33,6 +33,9 @@ all: ${PROGRAMS}
 lofi_rpi: lofi_rpi.c
 	gcc ${CCFLAGS} -Wall -lwiringPi -o $@ $@.c
 
+lofi_rmt: lofi_rpi
+	cp lofi_rpi lofi_rmt
+
 tags:
 	ctags lofi_rpi.c 
 

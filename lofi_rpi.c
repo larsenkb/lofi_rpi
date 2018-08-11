@@ -7,10 +7,11 @@
  *	spidev
  *	aml_i2c
  *
- * TODO: add code to print sequence number (printSeq)
  */
 
+#include <libgen.h>
 #include <sys/signalfd.h>
+#include <sys/types.h>
 #include <pthread.h>
 #include <signal.h>
 #include <unistd.h>
@@ -21,8 +22,16 @@
 #include <wiringPi.h>
 #include <wiringPiSPI.h>
 
-#define EN_ENH_SWAVE	1
-#define nrfIrq		4
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <strings.h>
+#include <fcntl.h>
+#include <netdb.h>
+
+
+#define NRFIRQ		4
 #define nrfCSN		10
 #define nrfCE		6
 #define SPI_BIT_BANG	1
@@ -37,7 +46,7 @@
 #define MAX_NODES		20
 
 #define handle_error(msg) \
-	do { perror(msg); exit(EXIT_FAILURE); } while (0)
+	do { perror(msg); /*exit(EXIT_FAILURE);*/ } while (0)
 
 #define NRF_CONFIG			0x00
 #define NRF_EN_AA			0x01
@@ -108,17 +117,24 @@ typedef enum {
 int longStr = 0;
 int printPayload = 0;
 int printSeq = 0;
+int en_shockburst = 1;
 char *pgmName = NULL;
 speed_t speed = speed_2M;
 int rf_chan = 2;
 int maxNodeRcvd = 0;
 int verbose = 0;
 int printTime = 0;
+int nrfIrq = NRFIRQ;
 //static int mainThreadPid;
 #if !SPI_BIT_BANG
 static int spiFd;
 #endif
 
+char rmt_host[256] = "odp";
+int rmt_port = 9900;
+int sockFd;
+int connected = FALSE;
+int remote = 0;
 
 
 //************  Forward Declarations
@@ -134,6 +150,16 @@ int nrfFlushTx( void );
 int nrfFlushRx( void );
 int nrfAddrRead( uint8_t reg, uint8_t *buf, int len );
 uint8_t nrfReadRxPayloadLen(void);
+
+
+/*
+ * error - wrapper for perror
+ */
+void error(char *msg) {
+	perror(msg);
+//	exit(0);
+}
+
 
 void printNodes(void)
 {
@@ -185,8 +211,12 @@ void nrfIntrHandler(void)
 void sig_handler( int sig )
 {
 	if (sig == SIGINT) {
+		printf("\nPowering down receiver...\n");
+    	digitalWrite(nrfCE, LOW);
 		printStats();
 		printNodes();
+		printf("Closing socket\n");
+		close(sockFd);
 		exit(0);
 	}
 }
@@ -194,7 +224,21 @@ void sig_handler( int sig )
 
 int Usage(void)
 {
-	fprintf(stderr, "Usage: %s [-v] [-l] [-p] [-c chan] [-s] [-t] [-x \"1,2,3-5,7\"] [-f \"1,2,3-5,7\"]\n", pgmName);
+	fprintf(stderr, "Usage: %s [-hvlpsSt] [-P n] [-H s] [-c chan] [-g pin] [-x \"1,3-5\"] [-f \"1,3-5\"]\n", pgmName);
+	fprintf(stderr, "  -h	this message\n");
+	fprintf(stderr, "  -v	verbose\n");
+	fprintf(stderr, "  -W	disable shockBurst mode\n");
+	fprintf(stderr, "  -l	print output in long string format\n");
+	fprintf(stderr, "  -p	print out payload in hex\n");
+	fprintf(stderr, "  -s	set receive RF bit rate to 1M (default is 2M)\n");
+	fprintf(stderr, "  -S	set receive RF bit rate to 250K (default is 2M)\n");
+	fprintf(stderr, "  -t	print timestamp\n");
+	fprintf(stderr, "  -P n	set TCP port to 'n'\n");
+	fprintf(stderr, "  -H s	set TCP host to 's'\n");
+	fprintf(stderr, "  -g n	use GPIO pin 'n' for IRQ input\n");
+	fprintf(stderr, "  -c n	set RF receive channel to 'n'\n");
+	fprintf(stderr, "  -x s	exclude nodes: e.g. s = \"1,2,3-5,7\"\n");
+	fprintf(stderr, "  -f s	include nodes: e.g. s = \"1,2,3-5,7\"\n");
 	return 0;
 }
 
@@ -257,6 +301,49 @@ int filter_nodes(node_t nodes[], char *optarg)
 	return 0;
 }
 
+
+int tcpSend(const char *msg)
+{
+	int n;
+	struct sockaddr_in serveraddr;
+	struct hostent *server;
+
+	if (!connected) {
+		sockFd = socket(AF_INET, SOCK_STREAM, 0);
+		if (sockFd < 0) {
+			fprintf(stderr, "cannot open socket\n");
+			return FALSE;
+		}
+	
+		server = gethostbyname(rmt_host);
+		if (server == NULL) {
+			fprintf(stderr, "ERROR, no such host as %s\n", rmt_host);
+			return FALSE;
+		}
+
+		bzero((char*)&serveraddr, sizeof(serveraddr));
+		serveraddr.sin_family = AF_INET;
+		bcopy((char*)server->h_addr, (char*)&serveraddr.sin_addr.s_addr, server->h_length);
+		serveraddr.sin_port = htons(rmt_port);
+
+		if (connect(sockFd, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) < 0) {
+			fprintf(stderr, "ERROR connecting\n");
+			return FALSE;
+		}
+		connected = TRUE;
+	}
+
+	n = write(sockFd, msg, strlen(msg));
+	if (n < 0) {
+		fprintf(stderr, "ERROR writing to socket\n");
+		close(sockFd);
+		sockFd = -1;
+		connected = FALSE;
+		return FALSE;
+	}
+	return TRUE;
+}
+
 /*
  * main
  */
@@ -272,20 +359,34 @@ int main(int argc, char *argv[])
 //	int rv;
 	int opt;
 
-	pgmName = argv[0];
+	pgmName = basename(argv[0]);
+
+	if (strcmp(pgmName, "lofi_rmt") == 0)
+		remote = 1;
+	else
+		remote = 0;
 
 	memset(nodes, 0, sizeof(nodes));
 
-	while ((opt = getopt(argc, argv, "vlpsStc:x:f:q:")) != -1) {
+	while ((opt = getopt(argc, argv, "hvWlpsStqc:x:f:g:P:H:")) != -1) {
 		switch (opt) {
+		case 'h':
+			Usage();
+			break;
 		case 'l':
 			longStr = 1;
+			break;
+		case 'W':
+			en_shockburst = 0;
 			break;
 		case 'p':
 			printPayload = 1;
 			break;
 		case 'q':
-			printSeq = atoi(optarg);
+			printSeq = 1;
+			break;
+		case 'g':
+			nrfIrq = atoi(optarg);
 			break;
 		case 's':
 			speed = speed_1M;
@@ -295,6 +396,13 @@ int main(int argc, char *argv[])
 			break;
 		case 't':
 			printTime = 1;
+			break;
+		case 'H':
+			strncpy(rmt_host, optarg, 255);
+			rmt_host[255] = '\0';
+			break;
+		case 'P':
+			rmt_port = atoi(optarg);
 			break;
 		case 'c':
 			rf_chan = atoi(optarg);
@@ -319,6 +427,11 @@ int main(int argc, char *argv[])
 			exit(-1);
 			break;
 		}
+	}
+
+	if (remote) {
+		printf("PORT: %d\n", rmt_port);
+		printf("HOST: %s\n", rmt_host);
 	}
 
 	memset(&stats, 0, sizeof(stats));
@@ -356,17 +469,15 @@ int main(int argc, char *argv[])
 	// enable 8-bit CRC; mask TX_DS and MAX_RT
 	nrfRegWrite( NRF_CONFIG, 0x38 );
 
-#if EN_ENH_SWAVE
-	// set nbr of retries and delay
-	// only needed for PTX???
-	nrfRegWrite( NRF_SETUP_RETR, 0x5F );
-
-	// enable auto ack
-	nrfRegWrite( NRF_EN_AA, 3 );
-#else
-	nrfRegWrite( NRF_SETUP_RETR, 0 );
-	nrfRegWrite( NRF_EN_AA, 0 );
-#endif
+	if (en_shockburst) {
+		// set nbr of retries and delay
+		//	nrfRegWrite( NRF_SETUP_RETR, 0x5F );
+		nrfRegWrite( NRF_SETUP_RETR, 0x77 );
+		nrfRegWrite( NRF_EN_AA, 3 ); // enable auto ack
+	} else {
+		nrfRegWrite( NRF_SETUP_RETR, 0 );
+		nrfRegWrite( NRF_EN_AA, 0 );
+	}
 
 	// Disable dynamic payload
 	nrfRegWrite( NRF_FEATURE, 0);
@@ -555,7 +666,7 @@ int parse_payload( uint8_t *payload )
 	char tbuf[128];
 	char sbuf[80];
 	int		tbufIdx = 0;
-	int		seq;
+	int		seq = 0;
 
 	tbuf[0] = '\0';
 	sbuf[0] = '\0';
@@ -578,11 +689,20 @@ int parse_payload( uint8_t *payload )
 		maxNodeRcvd = nodeId;
 
 	if (longStr) {
-		if (printTime) {
-			tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "%d Id: %2d", (int)ts.tv_sec, nodeId);
-		} else {
-			tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "Id: %2d", nodeId);
-		}
+//		seq = (payload[1] >> 2) & 0x3;
+//		if (printSeq) {
+//			if (printTime) {
+//				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "%d Id: %2d:%d", (int)ts.tv_sec, nodeId, seq);
+//			} else {
+//				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "Id: %2d:%d", nodeId, seq);
+//			}
+//		} else {
+			if (printTime) {
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "%d Id: %2d", (int)ts.tv_sec, nodeId);
+			} else {
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "Id: %2d", nodeId);
+			}
+//		}
 	}
 
 	if (printPayload) {
@@ -606,6 +726,8 @@ int parse_payload( uint8_t *payload )
 		switch (sensorId) {
 		case SENID_CTR:
 			seq = (payload[i] >> 2) & 0x3;
+			if (longStr && printSeq)
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
 			val = payload[i++] & 0x03;
 			val <<= 8;
 			val += payload[i++];
@@ -620,20 +742,18 @@ int parse_payload( uint8_t *payload )
 			nodes[nodeId].ctr = val;
 			if (longStr) {
 				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Ctr: %4d", val);
-				if (printSeq == (int)SENID_CTR)
-					tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
 		  } else
 				printf("%d NodeId: %2d  Ctr: %4d\n", (unsigned int)ts.tv_sec, nodeId, val);
 			break;
 		case SENID_SW1:
 			nodes[nodeId].online = 1;
 			seq = (payload[i] >> 2) & 0x3;
+			if (longStr && printSeq)
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
 			if (longStr) {
-				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW1: %s", (payload[i] & 0x02) ? "OPEN  " : "SHUT");
-				if (printSeq == (int)SENID_SW1)
-					tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW1: %s", (payload[i] & 0x02) ? "OPEN" : "SHUT");
 			} else
 				printf("%d NodeId: %2d  SW1: %s", (unsigned int)ts.tv_sec, nodeId, (payload[i] & 0x02) ? " OPEN\n" : " SHUT\n");
 			i++;
@@ -641,12 +761,12 @@ int parse_payload( uint8_t *payload )
 		case SENID_SW2:
 			nodes[nodeId].online = 1;
 			seq = (payload[i] >> 2) & 0x3;
+			if (longStr && printSeq)
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
 //			if (payload[i] & 0x01)
 //				printf(" toggled");
 			if (longStr) {
-				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW2: %s", (payload[i] & 0x02) ? "OPEN  " : "SHUT");
-				if (printSeq == (int)SENID_SW2)
-					tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  SW2: %s", (payload[i] & 0x02) ? "OPEN" : "SHUT");
 			} else
 				printf("%d NodeId: %2d  SW2: %s", (unsigned int)ts.tv_sec, nodeId, (payload[i] & 0x02) ? " OPEN\n" : " SHUT\n");
 			i++;
@@ -654,13 +774,13 @@ int parse_payload( uint8_t *payload )
 		case SENID_VCC:
 			nodes[nodeId].online = 1;
 			seq = (payload[i] >> 2) & 0x3;
+			if (longStr && printSeq)
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
 			val = payload[i++] & 0x03;
 			val <<= 8;
 			val += payload[i++];
 			if (longStr) {
 				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Vcc: %4.2f",(1.1 * 1024.0)/(float)val);
-				if (printSeq == (int)SENID_VCC)
-					tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
 			} else
 				printf("%d NodeId: %2d  Vcc: %4.2f\n", (unsigned int)ts.tv_sec, nodeId, (1.1 * 1024.0)/(float)val);
 			nodes[nodeId].vcc = (1.1 * 1024.0)/(float)val;
@@ -668,13 +788,13 @@ int parse_payload( uint8_t *payload )
 		case SENID_TEMP:
 			nodes[nodeId].online = 1;
 			seq = (payload[i] >> 2) & 0x3;
+			if (longStr && printSeq)
+				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
 			val = payload[i++] & 0x03;
 			val <<= 8;
 			val += payload[i++];
 			if (longStr) {
 				tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Temp: %4.2f",1.0 * (float)val - 260.0);
-				if (printSeq == (int)SENID_TEMP)
-					tbufIdx += snprintf(&tbuf[tbufIdx], 127-tbufIdx, "  Seq: %1d", seq);
 			} else
 				printf("%d NodeId: %2d  Vcc: %4.2f\n", (unsigned int)ts.tv_sec, nodeId, 1.0 * (float)val - 260.0);
 			break;
@@ -696,7 +816,12 @@ int parse_payload( uint8_t *payload )
 
 	if (longStr) {
 		printf("%s", tbuf);
-		if (sbuf[0] != '\0') printf("%s", sbuf);
+		strcat(tbuf, "\n");
+		if (remote)
+			tcpSend(tbuf);
+		if (sbuf[0] != '\0') {
+			printf("%s", sbuf);
+		}
 		printf("\n");
 	} else
 		printf("\n");
